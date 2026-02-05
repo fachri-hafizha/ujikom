@@ -98,7 +98,7 @@
                                     </li>
                                     
 
-                                    <script src="https://app.sandbox.midtrans.com/snap/snap.js" data-client-key="Mid-client-9VUnrPJpEEUKQZXG"></script>
+                                    <script src="https://app.sandbox.midtrans.com/snap/snap.js" data-client-key="Mid-client-fHaiIZ8t2z9vsZS4"></script>
                                     <script type="text/javascript">
                                         // For example trigger on button clicked, or any time you need
                                         var payButton = document.getElementById('pay-button');
