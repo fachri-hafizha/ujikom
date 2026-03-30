@@ -25,7 +25,7 @@ Route::get('/midtrans/redirect', [MidtransController::class, 'handleRedirect'])-
 Route::resource('verifikasi', VerifikasiController::class);
 Route::resource('daftar', RegisterController::class);
 Route::get('/search', [FrontController::class, 'search'])->name('search');
-Route::post('/midtrans/webhook', [StrukController::class, 'webhook'])->name('midtrans.webhook');
+
 
 Route::get('struk/{kodestruk}', [StrukController::class, 'struk'])->name('struk.detail');
 Route::resource('struk', SingleController::class);
