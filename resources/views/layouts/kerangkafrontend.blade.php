@@ -63,7 +63,7 @@
             <div class="anime-7 zigzag">
                 <img src="{{ asset('sbidu/assets/images/footer/c4.png') }}" alt="footer">
             </div>
-        </div
+</div>
         <div class="footer-top padding-bottom padding-top">
             <div class="container">
                 <div class="row mb--60">

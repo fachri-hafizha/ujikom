@@ -4,126 +4,155 @@ namespace App\Providers;
 
 use App\Models\Bid;
 use App\Models\Kategori;
-use Str;
+use Illuminate\Support\Str;
 use App\Models\Lelang;  
 use App\Models\Pemenang;
 use App\Models\Struk;
 use Carbon\Carbon;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\View;
-
+use Illuminate\Support\Facades\Schema;
 
 class LelangCekPemenang extends ServiceProvider
 {
-    /**
-     * Register services.
-     */
     public function register(): void
     {
         //
     }
 
-    /**
-     * Bootstrap services.
-     */
     public function boot(): void
     {
-        $kategoris = Kategori::all();
-        View::share('kategoris', $kategoris);
-        // Jalan di setiap request, auto check lelang yang udah berakhir
+        // ✅ Hindari error kalau tabel belum ada
+        if (Schema::hasTable('kategoris')) {
+            View::share('kategoris', Kategori::all());
+        }
+
         View::composer('*', function () {
+
+            // ❌ STOP kalau tabel belum siap (penting banget pas migrate / deploy)
+            if (
+                !Schema::hasTable('lelangs') ||
+                !Schema::hasTable('bids') ||
+                !Schema::hasTable('pemenangs') ||
+                !Schema::hasTable('struks')
+            ) {
+                return;
+            }
+
+            $now = now();
+
+            // =========================
+            // ✅ UPDATE STATUS LELANG
+            // =========================
             $lelangs = Lelang::latest()->get();
-            foreach($lelangs as $lelang){
-                $now = now();
-                if($now->lt($lelang->jadwal_mulai)) {
+
+            foreach ($lelangs as $lelang) {
+                if ($now->lt($lelang->jadwal_mulai)) {
                     $status = 'ditutup';
-                } elseif($now->between($lelang->jadwal_mulai, $lelang->jadwal_berakhir)){
+                } elseif ($now->between($lelang->jadwal_mulai, $lelang->jadwal_berakhir)) {
                     $status = 'dibuka';
                 } else {
                     $status = 'selesai';
                 }
 
-                if($lelang->status !== $status){
-                    $lelang->status = $status;
-                    $lelang->save();
+                if ($lelang->status !== $status) {
+                    $lelang->update(['status' => $status]);
                 }
             }
 
-            $lelangBerakhir = Lelang::where('jadwal_berakhir', '<=', Carbon::now())
-                ->whereDoesntHave('pemenang') // pastikan belum ada pemenang
-                ->with('bid')
+            // =========================
+            // ✅ TENTUKAN PEMENANG
+            // =========================
+            $lelangBerakhir = Lelang::where('jadwal_berakhir', '<=', $now)
+                ->whereDoesntHave('pemenang')
+                ->with(['bid', 'barang'])
                 ->get();
 
             foreach ($lelangBerakhir as $lelang) {
-                $pemenang = $lelang->bid()
-                    ->orderByDesc('bid') // pastikan 'bid' adalah kolom nilai
+
+                $bidTerbesar = $lelang->bid()
+                    ->orderByDesc('bid')
                     ->orderByDesc('created_at')
                     ->first();
-                if ($pemenang) {
-                    $newPemenang = Pemenang::create([
-                        'id_lelang' => $lelang->id,
-                        'id_user'   => $pemenang->id_user,
-                        'bid'       => $pemenang->bid, 
-                    ]);
-                    // generate kode lelang: L + 6 huruf random kapital
+
+                if (!$bidTerbesar) continue;
+
+                $newPemenang = Pemenang::create([
+                    'id_lelang' => $lelang->id,
+                    'id_user'   => $bidTerbesar->id_user,
+                    'bid'       => $bidTerbesar->bid,
+                ]);
+
+                // =========================
+                // ✅ GENERATE KODE STRUK
+                // =========================
+                do {
                     $kodeStruk = 'STRL-' . Str::upper(Str::random(10));
+                } while (Struk::where('kode_struk', $kodeStruk)->exists());
 
-                    // cek biar gak duplikat (kecil kemungkinan sih, tapi tetep aman)
-                    while (Struk::where('kode_struk', $kodeStruk)->exists()) {
-                        $kodeStruk = 'STRL-' . Str::upper(Str::random(10));
+                $total = $bidTerbesar->bid + ($lelang->barang->harga ?? 0);
+                $adminfee = $total * 0.05;
+                $grandtotal = $total + $adminfee;
+
+                Struk::create([
+                    'id_lelang'   => $lelang->id,
+                    'id_barang'   => $lelang->id_barang,
+                    'id_pemenang' => $newPemenang->id,
+                    'total'       => $grandtotal,
+                    'status'      => 'belum dibayar',
+                    'kode_unik'   => null,
+                    'tgl_trx'     => now(),
+                    'kode_struk'  => $kodeStruk,
+                ]);
+            }
+
+            // =========================
+            // ✅ BELUM BAYAR → PENDING
+            // =========================
+            Struk::where('status', 'belum dibayar')
+                ->get()
+                ->each(function ($struk) use ($now) {
+                    if ($now->gt($struk->tgl_trx->copy()->addHour())) {
+                        $struk->update(['status' => 'pending']);
                     }
-                    $total = $pemenang->bid + $lelang->barang->harga;
-                    $adminfee = $total * 0.05;
-                    $grandtotal = $total + $adminfee;
-                    Struk::create([
-                        'id_lelang'   => $lelang->id,
-                        'id_barang'   => $lelang->id_barang,
-                        'id_pemenang' => $newPemenang->id,
-                        'total'       => $grandtotal,
-                        'status'      => 'belum dibayar',
-                        'kode_unik'   => null,
-                        'tgl_trx'     => now(),
-                        'kode_struk'  => $kodeStruk,
+                });
+
+            // =========================
+            // ✅ PENDING → GAGAL
+            // =========================
+            Struk::where('status', 'pending')
+                ->get()
+                ->each(function ($struk) use ($now) {
+                    if ($now->gt($struk->updated_at->copy()->addHour())) {
+                        $struk->update(['status' => 'gagal']);
+                    }
+                });
+
+            // =========================
+            // ✅ HANDLE GAGAL (RESET LELANG)
+            // =========================
+            Struk::where('status', 'gagal')->get()
+                ->each(function ($struk) use ($now) {
+
+                    $lelang = Lelang::find($struk->id_lelang);
+                    if (!$lelang) return;
+
+                    // hapus semua terkait
+                    Struk::where('id_lelang', $lelang->id)->delete();
+                    Pemenang::where('id_lelang', $lelang->id)->delete();
+                    Bid::where('id_lelang', $lelang->id)->delete();
+
+                    // reset jadwal
+                    $mulai = $now->copy()->addHour();
+                    $selesai = $mulai->copy()->addHours(3);
+
+                    $lelang->update([
+                        'jadwal_mulai'   => $mulai,
+                        'jadwal_berakhir'=> $selesai,
+                        'status'         => 'ditutup',
                     ]);
-                }
-            }
-            $now = now();
+                });
 
-            $habiswaktubayar = Struk::where('status', 'belum dibayar')->get();
-            foreach($habiswaktubayar as $struk)
-            {
-                $bataswaktu = $struk->tgl_trx->addHour();
-                if($now->gt($bataswaktu)){
-                    $struk->status = 'pending';
-                    $struk->save();
-                }
-            }
-
-            $habiswaktupending = Struk::where('status', 'pending')->get();
-            foreach($habiswaktupending as $struk){
-                $bataswaktu = $struk->updated_at->addHour();
-                if($now->gt($bataswaktu)){
-                    $struk->status = 'gagal';
-                    $struk->save();
-                }
-            }
-            $struk = Struk::where('status', 'gagal')->get();
-            foreach($struk as $lelanggagal){
-                $lelangGaDibayar = Lelang::where('id', $lelanggagal->id_lelang)->first();
-                if($lelangGaDibayar){
-                    $struk = Struk::where('id_lelang', $lelangGaDibayar->id)->delete();
-                    $pemenang = Pemenang::where('id_lelang', $lelangGaDibayar->id)->delete();
-    
-                    $bid = Bid::where('id_lelang', $lelangGaDibayar->id)->delete();
-    
-                    $jadwalBaru = $now->copy()->addHour();
-                    $jadwalberakhir = $jadwalBaru->copy()->addHours(3);
-                    $lelangGaDibayar->jadwal_mulai = $jadwalBaru;
-                    $lelangGaDibayar->jadwal_berakhir = $jadwalberakhir;
-                    $lelangGaDibayar->save();
-                }
-
-            }
         });
     }
 }

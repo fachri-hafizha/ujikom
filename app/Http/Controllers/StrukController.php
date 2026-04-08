@@ -34,7 +34,7 @@ class StrukController extends Controller
         Config::$clientKey = config('services.midtrans.client_key');
        Config::$isProduction = false;
        Config::$isSanitized = true;
-       Config::$is3ds = true;
+       Config::$is3ds = true;                                                   
 
         // Ambil struk berdasarkan kode
         $struk = Struk::where('kode_struk', $kode)->firstOrFail();
